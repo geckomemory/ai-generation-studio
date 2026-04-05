@@ -285,17 +285,17 @@ export default function Studio() {
             <div className={styles.modalTitle}>API Ключи</div>
             <div className={styles.modalSub}>Хранятся только в браузере, никуда не отправляются</div>
             <div className={styles.field}>
-              <label>fal.ai API Key <span className={styles.labelNote}>— изображения и видео</span></label>
+              <label className={styles.label}>fal.ai API Key <span className={styles.labelNote}>— изображения и видео</span></label>
               <input className={styles.input} type="password" value={falKey} onChange={e => setFalKey(e.target.value)} placeholder="fal-..." />
               <div className={styles.inputNote}><a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer">fal.ai/dashboard</a> → API Keys</div>
             </div>
             <div className={styles.field}>
-              <label>ElevenLabs API Key <span className={styles.labelNote}>— озвучка</span></label>
+              <label className={styles.label}>ElevenLabs API Key <span className={styles.labelNote}>— озвучка</span></label>
               <input className={styles.input} type="password" value={elKey} onChange={e => setElKey(e.target.value)} placeholder="sk_..." />
               <div className={styles.inputNote}><a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer">elevenlabs.io</a> → Settings → API Keys</div>
             </div>
             <div className={styles.field}>
-              <label>Anthropic API Key <span className={styles.labelNote}>— автогенерация промптов (необязательно)</span></label>
+              <label className={styles.label}>Anthropic API Key <span className={styles.labelNote}>— автогенерация промптов (необязательно)</span></label>
               <input className={styles.input} type="password" value={claudeKey} onChange={e => setClaudeKey(e.target.value)} placeholder="sk-ant-..." />
               <div className={styles.inputNote}><a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a></div>
             </div>
@@ -337,13 +337,13 @@ export default function Studio() {
                   <div className={styles.sectionTitle}>Параметры изображений</div>
                   <div className={styles.row3}>
                     <div className={styles.field}>
-                      <label>Количество</label>
+                      <label className={styles.label}>Количество</label>
                       <select className={styles.select} value={imgCount} onChange={e => setImgCount(+e.target.value)}>
                         {[3,4,5,6,8,10].map(n => <option key={n} value={n}>{n} шт.</option>)}
                       </select>
                     </div>
                     <div className={styles.field}>
-                      <label>Соотношение сторон</label>
+                      <label className={styles.label}>Соотношение сторон</label>
                       <select className={styles.select} value={aspect} onChange={e => setAspect(e.target.value)}>
                         <option value="1:1">1:1 квадрат</option>
                         <option value="16:9">16:9 широкий</option>
@@ -352,7 +352,7 @@ export default function Studio() {
                       </select>
                     </div>
                     <div className={styles.field}>
-                      <label>Разрешение</label>
+                      <label className={styles.label}>Разрешение</label>
                       <select className={styles.select} value={resolution} onChange={e => setResolution(e.target.value)}>
                         <option value="1080p">1080p</option>
                         <option value="2K">2K</option>
@@ -487,7 +487,7 @@ export default function Studio() {
                 <section className={styles.section}>
                   <div className={styles.row2}>
                     <div className={styles.field}>
-                      <label>Длительность</label>
+                      <label className={styles.label}>Длительность</label>
                       <select className={styles.select} value={vidDuration} onChange={e => setVidDuration(+e.target.value)}>
                         <option value={5}>5 секунд</option>
                         <option value={10}>10 секунд</option>
@@ -495,7 +495,7 @@ export default function Studio() {
                       </select>
                     </div>
                     <div className={styles.field}>
-                      <label>Промпт движения</label>
+                      <label className={styles.label}>Промпт движения</label>
                       <div className={styles.toggleRow}>
                         <button className={`${styles.toggleBtn} ${motionMode==='claude' ? styles.toggleActive : ''}`} onClick={() => setMotionMode('claude')}>✦ Claude</button>
                         <button className={`${styles.toggleBtn} ${motionMode==='user' ? styles.toggleActive : ''}`} onClick={() => setMotionMode('user')}>Я укажу</button>
@@ -592,7 +592,7 @@ export default function Studio() {
 
                 <section className={styles.section}>
                   <div className={styles.field}>
-                    <label>Модель ElevenLabs</label>
+                    <label className={styles.label}>Модель ElevenLabs</label>
                     <select className={styles.select} value={elModel} onChange={e => setElModel(e.target.value)}>
                       <option value="eleven_multilingual_v2">Multilingual v2 — качество</option>
                       <option value="eleven_flash_v2_5">Flash v2.5 — быстро</option>
