@@ -166,7 +166,7 @@ export default function Studio() {
 
   const generateVideos = async () => {
     if (!falKey) { setMsg('videos', '✗ Нужен fal.ai API ключ'); return }
-    const toAnim = selectedImages.size > 0 ? Array.from(selectedImages) : images.map((_, i) => i)
+    const toAnim = selectedImages.size > 0 ? [...selectedImages] : images.map((_, i) => i)
     if (!toAnim.length) { setMsg('videos', '✗ Нет изображений'); return }
     setLoad('videos', true)
     setVideos([])
@@ -414,7 +414,7 @@ export default function Studio() {
                           <textarea
                             className={styles.promptEdit}
                             value={editedPrompts[i] ?? p.prompt}
-                            onChange={e => setEditedPrompts(prev => { const n=Array.from(prev); n[i]=e.target.value; return n })}
+                            onChange={e => setEditedPrompts(prev => { const n=[...prev]; n[i]=e.target.value; return n })}
                           />
                         </div>
                       ))}
