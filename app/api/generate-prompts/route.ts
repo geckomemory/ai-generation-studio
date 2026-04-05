@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
   const msg = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: 1500,
-    system: `You are an expert image prompt engineer for AI image models (${modelName}). Create ${count} diverse, detailed English prompts. Return ONLY valid JSON array, no markdown:\n[{"prompt":"...","variation":"название на русском 3-5 слов"}]\nAspect ratio: ${aspect}. Make each prompt unique: vary pose, angle, lighting, mood. Be specific and detailed.`,
+    system: `You are an expert image prompt engineer for AI image models (${modelName}). Create ${count} diverse, detailed English prompts. Return ONLY valid JSON array, no markdown:\n[{"prompt":"...","variation":"название на русском 3-5 слов"}]\nAspect ratio: ${aspect}. Make each prompt unique: vary pose, angle, lighting, mood.`,
     messages: [{ role: 'user', content: `Task: ${task}\n\nGenerate ${count} diverse prompts. JSON only.` }],
   })
 
