@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "app/api/generate-video/route.ts": { "maxDuration": 300 },
+    "app/api/lipsync/route.ts": { "maxDuration": 300 }
+  }
+}
