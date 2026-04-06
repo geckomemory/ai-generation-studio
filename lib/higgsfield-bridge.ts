@@ -40,18 +40,28 @@ export async function hfApiRequest<T = any>(
   return sendToExtension<T>({ type: 'API_REQUEST', url, method, body })
 }
 
-// ─── Higgsfield job helpers ─────────────────────────────────────────────────
+// ─── Higgsfield API helpers ─────────────────────────────────────────────────
 
-export async function hfCreateJob(body: Record<string, any>): Promise<any> {
-  const res = await hfApiRequest('https://fnf.higgsfield.ai/jobs', 'POST', body)
+// Real API format: POST /jobs/{model_type} with { params: {...}, use_unlim: false }
+
+async function hfCreateJob(modelType: string, params: Record<string, any>): Promise<any> {
+  const res = await hfApiRequest(
+    `https://fnf.higgsfield.ai/jobs/${modelType}`,
+    'POST',
+    { params, use_unlim: false }
+  )
   return res
 }
 
-export async function hfGetJobStatus(jobId: string): Promise<any> {
+async function hfGetJob(jobId: string): Promise<any> {
+  return hfApiRequest(`https://fnf.higgsfield.ai/jobs/${jobId}`)
+}
+
+async function hfGetJobStatus(jobId: string): Promise<any> {
   return hfApiRequest(`https://fnf.higgsfield.ai/jobs/${jobId}/status`)
 }
 
-export async function hfPollJob(
+async function hfPollJob(
   jobId: string,
   onProgress?: (data: any) => void,
   intervalMs = 4000,
@@ -59,21 +69,42 @@ export async function hfPollJob(
 ): Promise<any> {
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, intervalMs))
-    const res = await hfGetJobStatus(jobId)
-    const data = res.data || res
-    onProgress?.(data)
-    const st = data.status?.toLowerCase?.() || ''
-    if (st === 'completed' || st === 'done' || st === 'succeeded' || data.output_url || data.video_url) {
-      return data
-    }
-    if (st === 'failed' || st === 'error') {
-      throw new Error('Job failed: ' + (data.error || JSON.stringify(data).slice(0, 200)))
+    try {
+      const res = await hfGetJob(jobId)
+      const data = res.data || res
+      onProgress?.(data)
+
+      // Check if jobs array has completed items with output
+      const jobs = data.jobs || []
+      for (const job of jobs) {
+        if (job.status === 'completed' || job.status === 'done' || job.status === 'succeeded') {
+          if (job.output_url || job.result_url || job.url) {
+            return data
+          }
+        }
+        if (job.output && (job.output.url || job.output.image_url || job.output.video_url)) {
+          return data
+        }
+      }
+
+      // Check top-level status
+      const st = (data.status || '').toLowerCase()
+      if (st === 'completed' || st === 'done' || st === 'succeeded') return data
+      if (st === 'failed' || st === 'error') {
+        throw new Error('Job failed: ' + (data.error || JSON.stringify(data).slice(0, 300)))
+      }
+
+      // Check if result images/videos exist
+      if (data.result_url || data.output_url || data.image_url || data.video_url) return data
+    } catch (e: any) {
+      // 404 or similar might mean job not ready yet, keep polling
+      if (e.message?.includes('failed') || e.message?.includes('error')) throw e
     }
   }
   throw new Error('Job polling timeout')
 }
 
-// ─── Model mapping: fal.ai model ID → Higgsfield job_set_type ──────────────
+// ─── Model mapping: fal.ai model ID → Higgsfield URL path ──────────────────
 
 const HF_IMAGE_MAP: Record<string, string> = {
   'fal-ai/nano-banana-pro': 'nano-banana-pro',
@@ -81,14 +112,14 @@ const HF_IMAGE_MAP: Record<string, string> = {
 }
 
 const HF_VIDEO_MAP: Record<string, string> = {
-  'fal-ai/kling-video/v3/pro/image-to-video': 'kling3_0',
-  'fal-ai/kling-video/v2.5/pro/image-to-video': 'kling2_5',
-  'fal-ai/kling-video/v2.1/pro/image-to-video': 'kling2_1',
-  'fal-ai/wan/v2.5/image-to-video': 'wan_2_5',
+  'fal-ai/kling-video/v3/pro/image-to-video': 'kling-3-0',
+  'fal-ai/kling-video/v2.5/pro/image-to-video': 'kling-2-5',
+  'fal-ai/kling-video/v2.1/pro/image-to-video': 'kling-2-1',
+  'fal-ai/wan/v2.5/image-to-video': 'wan-2-5',
   'fal-ai/sora/image-to-video': 'sora',
   'fal-ai/seedance/v2/image-to-video': 'seedance',
   'fal-ai/minimax/hailuo-02/standard/image-to-video': 'hailuo',
-  'fal-ai/kling-video/v1.6/pro/image-to-video': 'kling1_6',
+  'fal-ai/kling-video/v1.6/pro/image-to-video': 'kling-1-6',
 }
 
 export function getHfImageType(falModelId: string): string | null {
@@ -103,6 +134,50 @@ export function isHfSupported(falModelId: string): boolean {
   return !!(HF_IMAGE_MAP[falModelId] || HF_VIDEO_MAP[falModelId])
 }
 
+// ─── Extract result URL from job data ───────────────────────────────────────
+
+function extractImageUrl(data: any): string | null {
+  // Check jobs array first
+  const jobs = data.jobs || []
+  for (const job of jobs) {
+    if (job.result_url) return job.result_url
+    if (job.output_url) return job.output_url
+    if (job.url) return job.url
+    if (job.output?.url) return job.output.url
+    if (job.output?.image_url) return job.output.image_url
+    if (job.result?.url) return job.result.url
+    // Sometimes result is in job.result as a string URL
+    if (typeof job.result === 'string' && job.result.startsWith('http')) return job.result
+  }
+  // Check top-level
+  if (data.result_url) return data.result_url
+  if (data.output_url) return data.output_url
+  if (data.image_url) return data.image_url
+  if (data.output?.url) return data.output.url
+  if (data.images?.[0]?.url) return data.images[0].url
+  if (data.images?.[0]) return data.images[0]
+  return null
+}
+
+function extractVideoUrl(data: any): string | null {
+  const jobs = data.jobs || []
+  for (const job of jobs) {
+    if (job.result_url) return job.result_url
+    if (job.output_url) return job.output_url
+    if (job.url) return job.url
+    if (job.output?.url) return job.output.url
+    if (job.output?.video_url) return job.output.video_url
+    if (job.result?.url) return job.result.url
+    if (typeof job.result === 'string' && job.result.startsWith('http')) return job.result
+  }
+  if (data.result_url) return data.result_url
+  if (data.output_url) return data.output_url
+  if (data.video_url) return data.video_url
+  if (data.video?.url) return data.video.url
+  if (data.output?.url) return data.output.url
+  return null
+}
+
 // ─── High-level generation functions ────────────────────────────────────────
 
 export async function hfGenerateImage(opts: {
@@ -112,27 +187,29 @@ export async function hfGenerateImage(opts: {
   resolution?: string
   referenceUrl?: string
 }): Promise<string> {
-  const jobType = getHfImageType(opts.modelId)
-  if (!jobType) throw new Error(`Model ${opts.modelId} not supported on Higgsfield`)
+  const modelType = getHfImageType(opts.modelId)
+  if (!modelType) throw new Error(`Model ${opts.modelId} not supported on Higgsfield`)
 
-  const body: Record<string, any> = {
-    job_set_type: jobType,
+  const params: Record<string, any> = {
     prompt: opts.prompt,
+    input_images: [],
   }
-  if (opts.aspect) body.aspect_ratio = opts.aspect
-  if (opts.resolution) body.resolution = opts.resolution
-  if (opts.referenceUrl) body.image_url = opts.referenceUrl
+  if (opts.aspect) params.aspect_ratio = opts.aspect
+  if (opts.referenceUrl) params.input_images = [opts.referenceUrl]
 
-  const createRes = await hfCreateJob(body)
+  const createRes = await hfCreateJob(modelType, params)
   const data = createRes.data || createRes
-  const jobId = data.id || data.job_id || data.jobId
-  if (!jobId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
 
-  const result = await hfPollJob(jobId)
-  const url = result.output_url || result.image_url || result.output?.url
-    || result.images?.[0]?.url || result.images?.[0]
-    || result.result?.url || result.result?.image_url
-  if (!url) throw new Error('No image URL in result: ' + JSON.stringify(result).slice(0, 300))
+  // Get the job set ID and sub-job ID
+  const jobSetId = data.id
+  const subJobId = data.jobs?.[0]?.id
+  const pollId = subJobId || jobSetId
+
+  if (!pollId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
+
+  const result = await hfPollJob(jobSetId)
+  const url = extractImageUrl(result)
+  if (!url) throw new Error('No image URL in result: ' + JSON.stringify(result).slice(0, 500))
   return url
 }
 
@@ -142,25 +219,23 @@ export async function hfGenerateVideo(opts: {
   prompt?: string
   duration?: number
 }): Promise<string> {
-  const jobType = getHfVideoType(opts.modelId)
-  if (!jobType) throw new Error(`Model ${opts.modelId} not supported on Higgsfield`)
+  const modelType = getHfVideoType(opts.modelId)
+  if (!modelType) throw new Error(`Model ${opts.modelId} not supported on Higgsfield`)
 
-  const body: Record<string, any> = {
-    job_set_type: jobType,
-    image_url: opts.imageUrl,
+  const params: Record<string, any> = {
+    input_images: [opts.imageUrl],
   }
-  if (opts.prompt) body.prompt = opts.prompt
-  if (opts.duration) body.duration = opts.duration
+  if (opts.prompt) params.prompt = opts.prompt
+  if (opts.duration) params.duration = opts.duration
 
-  const createRes = await hfCreateJob(body)
+  const createRes = await hfCreateJob(modelType, params)
   const data = createRes.data || createRes
-  const jobId = data.id || data.job_id || data.jobId
-  if (!jobId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
+  const jobSetId = data.id
+  if (!jobSetId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
 
-  const result = await hfPollJob(jobId, undefined, 5000, 90)
-  const url = result.output_url || result.video_url || result.output?.url
-    || result.video?.url || result.result?.url || result.result?.video_url
-  if (!url) throw new Error('No video URL in result: ' + JSON.stringify(result).slice(0, 300))
+  const result = await hfPollJob(jobSetId, undefined, 5000, 90)
+  const url = extractVideoUrl(result)
+  if (!url) throw new Error('No video URL in result: ' + JSON.stringify(result).slice(0, 500))
   return url
 }
 
@@ -168,20 +243,18 @@ export async function hfLipsync(opts: {
   imageUrl: string
   audioBase64: string
 }): Promise<string> {
-  const body: Record<string, any> = {
-    job_set_type: 'dubbing_lipsync',
-    image_url: opts.imageUrl,
+  const params: Record<string, any> = {
+    input_images: [opts.imageUrl],
     audio_data: opts.audioBase64,
   }
 
-  const createRes = await hfCreateJob(body)
+  const createRes = await hfCreateJob('dubbing-lipsync', params)
   const data = createRes.data || createRes
-  const jobId = data.id || data.job_id || data.jobId
-  if (!jobId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
+  const jobSetId = data.id
+  if (!jobSetId) throw new Error('No job ID: ' + JSON.stringify(data).slice(0, 300))
 
-  const result = await hfPollJob(jobId, undefined, 5000, 90)
-  const url = result.output_url || result.video_url || result.output?.url
-    || result.video?.url || result.result?.url
-  if (!url) throw new Error('No lipsync URL in result: ' + JSON.stringify(result).slice(0, 300))
+  const result = await hfPollJob(jobSetId, undefined, 5000, 90)
+  const url = extractVideoUrl(result)
+  if (!url) throw new Error('No lipsync URL in result: ' + JSON.stringify(result).slice(0, 500))
   return url
 }
