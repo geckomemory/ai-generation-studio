@@ -207,7 +207,7 @@ export default function Studio() {
     if (backend === 'higgsfield' && !isHfSupported(vidModel.id)) {
       setMsg('videos', `✗ ${vidModel.name} недоступна через Higgsfield. Используй fal.ai.`); return
     }
-    const toAnim = selectedImages.size > 0 ? [...selectedImages] : images.map((_, i) => i)
+    const toAnim = selectedImages.size > 0 ? Array.from(selectedImages) : images.map((_, i) => i)
     if (!toAnim.length) { setMsg('videos', '✗ Нет изображений'); return }
     setLoad('videos', true)
     setVideos([])
