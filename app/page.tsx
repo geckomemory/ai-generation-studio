@@ -1,6 +1,10 @@
 'use client'
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import styles from './page.module.css'
+import {
+  hfPing, hfGenerateImage, hfGenerateVideo, hfLipsync,
+  isHfSupported, getHfImageType, getHfVideoType,
+} from '../lib/higgsfield-bridge'
 
 // ─── MODELS ───────────────────────────────────────────────────────────────────
 
@@ -37,9 +41,15 @@ interface GeneratedImage { url: string; prompt: string; variation: string }
 interface GeneratedVideo { url: string; label: string; fromImage?: string }
 interface Prompt { prompt: string; variation: string }
 
+type Backend = 'fal' | 'higgsfield'
+
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
 export default function Studio() {
+  // Backend
+  const [backend, setBackend] = useState<Backend>('fal')
+  const [hfConnected, setHfConnected] = useState<boolean | null>(null)
+
   // Keys
   const [falKey, setFalKey] = useState('')
   const [elKey, setElKey] = useState('')
@@ -92,6 +102,15 @@ export default function Studio() {
   const setLoad = (k: string, v: boolean) => setLoading(p => ({...p, [k]: v}))
   const setMsg = (k: string, v: string) => setProgress(p => ({...p, [k]: v}))
 
+  // ─── CHECK HF EXTENSION ON MOUNT ─────────────────────────────────────────
+
+  useEffect(() => {
+    hfPing().then(ok => {
+      setHfConnected(ok)
+      if (ok) setBackend('higgsfield')
+    })
+  }, [])
+
   // ─── HELPERS ──────────────────────────────────────────────────────────────
 
   const headers = useCallback(() => ({
@@ -143,30 +162,52 @@ export default function Studio() {
   }
 
   const generateImages = async () => {
-    if (!falKey) { setMsg('images', '✗ Нужен fal.ai API ключ'); return }
+    if (backend === 'fal' && !falKey) { setMsg('images', '✗ Нужен fal.ai API ключ'); return }
+    if (backend === 'higgsfield' && !isHfSupported(imgModel.id)) {
+      setMsg('images', `✗ ${imgModel.name} недоступна через Higgsfield. Используй fal.ai или выбери Nano Banana.`); return
+    }
     setLoad('images', true)
     setImages([])
     setSelectedImages(new Set())
     const ps = editedPrompts.length ? editedPrompts : prompts.map(p => p.prompt)
+    if (!ps.length) { setMsg('images', '✗ Сначала сгенерируй промпты на вкладке Задача'); setLoad('images', false); return }
+
     for (let i = 0; i < ps.length; i++) {
-      setMsg('images', `Генерирую ${i + 1} / ${ps.length}...`)
+      setMsg('images', `${backend === 'higgsfield' ? '🟣 HF' : '🔵 fal'} Генерирую ${i + 1} / ${ps.length}...`)
       try {
-        const res = await fetch('/api/generate-image', {
-          method: 'POST', headers: headers(),
-          body: JSON.stringify({ prompt: ps[i], modelId: imgModel.id, aspect, resolution, referenceUrl: refUrl }),
-        })
-        const { url, error } = await res.json()
-        if (error) throw new Error(error)
+        let url: string | undefined
+
+        if (backend === 'higgsfield') {
+          url = await hfGenerateImage({
+            prompt: ps[i], modelId: imgModel.id,
+            aspect, resolution, referenceUrl: refUrl || undefined,
+          })
+        } else {
+          const res = await fetch('/api/generate-image', {
+            method: 'POST', headers: headers(),
+            body: JSON.stringify({ prompt: ps[i], modelId: imgModel.id, aspect, resolution, referenceUrl: refUrl }),
+          })
+          const data = await res.json()
+          if (data.error) throw new Error(data.error)
+          url = data.url
+        }
+
         if (url) setImages(prev => [...prev, { url, prompt: ps[i], variation: prompts[i]?.variation || `#${i+1}` }])
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        console.error(`Image ${i+1} failed:`, e)
+        setMsg('images', `⚠ ${i+1}/${ps.length} ошибка: ${(e as Error).message.slice(0, 80)}`)
+      }
     }
     setMsg('images', `✓ Готово`)
     setLoad('images', false)
   }
 
   const generateVideos = async () => {
-    if (!falKey) { setMsg('videos', '✗ Нужен fal.ai API ключ'); return }
-    const toAnim = selectedImages.size > 0 ? Array.from(selectedImages) : images.map((_, i) => i)
+    if (backend === 'fal' && !falKey) { setMsg('videos', '✗ Нужен fal.ai API ключ'); return }
+    if (backend === 'higgsfield' && !isHfSupported(vidModel.id)) {
+      setMsg('videos', `✗ ${vidModel.name} недоступна через Higgsfield. Используй fal.ai.`); return
+    }
+    const toAnim = selectedImages.size > 0 ? [...selectedImages] : images.map((_, i) => i)
     if (!toAnim.length) { setMsg('videos', '✗ Нет изображений'); return }
     setLoad('videos', true)
     setVideos([])
@@ -186,16 +227,30 @@ export default function Studio() {
 
     for (let i = 0; i < toAnim.length; i++) {
       const img = images[toAnim[i]]
-      setMsg('videos', `Анимирую ${i + 1} / ${toAnim.length} через ${vidModel.name}...`)
+      setMsg('videos', `${backend === 'higgsfield' ? '🟣 HF' : '🔵 fal'} Анимирую ${i + 1} / ${toAnim.length} через ${vidModel.name}...`)
       try {
-        const res = await fetch('/api/generate-video', {
-          method: 'POST', headers: headers(),
-          body: JSON.stringify({ imageUrl: img.url, modelId: vidModel.id, prompt: mp, duration: vidDuration }),
-        })
-        const { url, error } = await res.json()
-        if (error) throw new Error(error)
+        let url: string | undefined
+
+        if (backend === 'higgsfield') {
+          url = await hfGenerateVideo({
+            imageUrl: img.url, modelId: vidModel.id,
+            prompt: mp, duration: vidDuration,
+          })
+        } else {
+          const res = await fetch('/api/generate-video', {
+            method: 'POST', headers: headers(),
+            body: JSON.stringify({ imageUrl: img.url, modelId: vidModel.id, prompt: mp, duration: vidDuration }),
+          })
+          const data = await res.json()
+          if (data.error) throw new Error(data.error)
+          url = data.url
+        }
+
         if (url) setVideos(prev => [...prev, { url, label: img.variation, fromImage: img.url }])
-      } catch (e) { console.error(e) }
+      } catch (e) {
+        console.error(`Video ${i+1} failed:`, e)
+        setMsg('videos', `⚠ ${i+1}/${toAnim.length} ошибка: ${(e as Error).message.slice(0, 80)}`)
+      }
     }
     setMsg('videos', `✓ Готово`)
     setLoad('videos', false)
@@ -234,23 +289,39 @@ export default function Studio() {
   }
 
   const runLipsync = async () => {
-    if (!falKey || !lipsyncAudio || !images[lipsyncImg]) { setMsg('lipsync', '✗ Нужны изображение, аудио и fal.ai ключ'); return }
+    if (!images[lipsyncImg]) { setMsg('lipsync', '✗ Нужно изображение'); return }
+    if (!lipsyncAudio && !audios.length) { setMsg('lipsync', '✗ Нужна озвучка'); return }
     setLoad('lipsync', true)
-    setMsg('lipsync', 'Создаю липсинк через Kling Avatars...')
-    try {
-      const res = await fetch('/api/lipsync', {
-        method: 'POST', headers: headers(),
-        body: JSON.stringify({ imageUrl: images[lipsyncImg].url, audioBase64: lipsyncAudio }),
-      })
-      const { url, error } = await res.json()
-      if (error) throw new Error(error)
-      if (url) setVideos(prev => [...prev, { url, label: `Липсинк · ${images[lipsyncImg].variation}` }])
-      setMsg('lipsync', '✓ Липсинк готов')
-    } catch (e) { setMsg('lipsync', '✗ ' + (e as Error).message) }
+    const audioData = lipsyncAudio || audios[audios.length - 1]?.data
+
+    if (backend === 'higgsfield') {
+      setMsg('lipsync', '🟣 HF · Создаю липсинк...')
+      try {
+        const url = await hfLipsync({ imageUrl: images[lipsyncImg].url, audioBase64: audioData })
+        setVideos(prev => [...prev, { url, label: `Липсинк · ${images[lipsyncImg].variation}` }])
+        setMsg('lipsync', '✓ Липсинк готов')
+      } catch (e) { setMsg('lipsync', '✗ ' + (e as Error).message) }
+    } else {
+      if (!falKey) { setMsg('lipsync', '✗ Нужен fal.ai ключ'); setLoad('lipsync', false); return }
+      setMsg('lipsync', 'Создаю липсинк через Kling Avatars...')
+      try {
+        const res = await fetch('/api/lipsync', {
+          method: 'POST', headers: headers(),
+          body: JSON.stringify({ imageUrl: images[lipsyncImg].url, audioBase64: audioData }),
+        })
+        const { url, error } = await res.json()
+        if (error) throw new Error(error)
+        if (url) setVideos(prev => [...prev, { url, label: `Липсинк · ${images[lipsyncImg].variation}` }])
+        setMsg('lipsync', '✓ Липсинк готов')
+      } catch (e) { setMsg('lipsync', '✗ ' + (e as Error).message) }
+    }
     setLoad('lipsync', false)
   }
 
   // ─── RENDER ───────────────────────────────────────────────────────────────
+
+  const backendLabel = backend === 'higgsfield' ? '🟣 Higgsfield' : '🔵 fal.ai'
+  const canSkipFalKey = backend === 'higgsfield' && hfConnected
 
   return (
     <div className={styles.root}>
@@ -272,9 +343,37 @@ export default function Studio() {
               </button>
             ))}
           </nav>
-          <button className={styles.keysBtn} onClick={() => setKeysOk(false)}>
-            {keysOk ? '🔑 Ключи ✓' : '🔑 Ключи'}
-          </button>
+          <div style={{display:'flex',gap:6,alignItems:'center'}}>
+            {/* BACKEND TOGGLE */}
+            <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:'1px solid rgba(255,255,255,0.1)'}}>
+              <button
+                onClick={() => setBackend('higgsfield')}
+                style={{
+                  padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
+                  background: backend === 'higgsfield' ? '#6c47ff' : 'rgba(255,255,255,0.05)',
+                  color: backend === 'higgsfield' ? '#fff' : '#888',
+                  opacity: hfConnected ? 1 : 0.4,
+                }}
+                disabled={!hfConnected}
+                title={hfConnected ? 'Higgsfield Bridge подключён' : 'Расширение не найдено'}
+              >
+                🟣 HF {hfConnected ? '✓' : '✗'}
+              </button>
+              <button
+                onClick={() => setBackend('fal')}
+                style={{
+                  padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
+                  background: backend === 'fal' ? '#2563eb' : 'rgba(255,255,255,0.05)',
+                  color: backend === 'fal' ? '#fff' : '#888',
+                }}
+              >
+                🔵 fal.ai
+              </button>
+            </div>
+            <button className={styles.keysBtn} onClick={() => setKeysOk(false)}>
+              {keysOk ? '🔑 ✓' : '🔑'}
+            </button>
+          </div>
         </div>
       </header>
 
@@ -283,9 +382,15 @@ export default function Studio() {
         <div className={styles.modal}>
           <div className={styles.modalBox}>
             <div className={styles.modalTitle}>API Ключи</div>
-            <div className={styles.modalSub}>Хранятся только в браузере, никуда не отправляются</div>
+            <div className={styles.modalSub}>
+              {canSkipFalKey
+                ? '🟣 Higgsfield Bridge подключён! fal.ai ключ не обязателен для Nano Banana и видео.'
+                : 'Хранятся только в браузере, никуда не отправляются'}
+            </div>
             <div className={styles.field}>
-              <label className={styles.label}>fal.ai API Key <span className={styles.labelNote}>— изображения и видео</span></label>
+              <label className={styles.label}>
+                fal.ai API Key <span className={styles.labelNote}>— изображения и видео {canSkipFalKey && '(необязательно с HF)'}</span>
+              </label>
               <input className={styles.input} type="password" value={falKey} onChange={e => setFalKey(e.target.value)} placeholder="fal-..." />
               <div className={styles.inputNote}><a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer">fal.ai/dashboard</a> → API Keys</div>
             </div>
@@ -299,8 +404,8 @@ export default function Studio() {
               <input className={styles.input} type="password" value={claudeKey} onChange={e => setClaudeKey(e.target.value)} placeholder="sk-ant-..." />
               <div className={styles.inputNote}><a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a></div>
             </div>
-            <button className={styles.btnPrimary} onClick={() => { if(falKey) setKeysOk(true) }}>
-              {falKey ? 'Готово →' : 'Нужен хотя бы fal.ai ключ'}
+            <button className={styles.btnPrimary} onClick={() => { if (falKey || canSkipFalKey) setKeysOk(true) }}>
+              {(falKey || canSkipFalKey) ? 'Готово →' : 'Нужен хотя бы fal.ai ключ'}
             </button>
           </div>
         </div>
@@ -388,16 +493,26 @@ export default function Studio() {
 
               <div className={styles.col}>
                 <section className={styles.section}>
-                  <div className={styles.sectionTitle}>Модель изображений</div>
+                  <div className={styles.sectionHead}>
+                    <span className={styles.sectionTitle}>Модель изображений</span>
+                    <span style={{fontSize:11,color:'#888'}}>{backendLabel}</span>
+                  </div>
                   <div className={styles.modelGrid}>
-                    {IMG_MODELS.map(m => (
-                      <button key={m.id} className={`${styles.modelCard} ${imgModel.id === m.id ? styles.modelCardActive : ''}`} onClick={() => setImgModel(m)}>
-                        {imgModel.id === m.id && <span className={styles.modelCheck}>✓</span>}
-                        <div className={styles.modelTag}>{m.tag}</div>
-                        <div className={styles.modelName}>{m.name}</div>
-                        <div className={styles.modelDesc}>{m.desc}</div>
-                      </button>
-                    ))}
+                    {IMG_MODELS.map(m => {
+                      const hfOk = getHfImageType(m.id)
+                      return (
+                        <button key={m.id} className={`${styles.modelCard} ${imgModel.id === m.id ? styles.modelCardActive : ''}`} onClick={() => setImgModel(m)}>
+                          {imgModel.id === m.id && <span className={styles.modelCheck}>✓</span>}
+                          <div className={styles.modelTag}>
+                            {m.tag}
+                            {backend === 'higgsfield' && !hfOk && <span style={{marginLeft:4,color:'#ff6b6b',fontSize:9}}>только fal</span>}
+                            {backend === 'higgsfield' && hfOk && <span style={{marginLeft:4,color:'#a78bfa',fontSize:9}}>HF ✓</span>}
+                          </div>
+                          <div className={styles.modelName}>{m.name}</div>
+                          <div className={styles.modelDesc}>{m.desc}</div>
+                        </button>
+                      )
+                    })}
                   </div>
                 </section>
 
@@ -432,13 +547,13 @@ export default function Studio() {
             <div className={styles.pageHead}>
               <div>
                 <div className={styles.pageTitle}>Генерация изображений</div>
-                <div className={styles.pageSub}>{imgModel.name} · {aspect} · {resolution}</div>
+                <div className={styles.pageSub}>{imgModel.name} · {aspect} · {resolution} · {backendLabel}</div>
               </div>
               <div className={styles.pageActions}>
                 <button className={styles.btnGhost} onClick={() => setSelectedImages(new Set(images.map((_,i)=>i)))}>Все</button>
                 <button className={styles.btnGhost} onClick={() => setSelectedImages(new Set())}>Снять</button>
                 <button className={styles.btnPrimary} onClick={generateImages} disabled={loading.images}>
-                  {loading.images ? <><span className={styles.spin}/> Генерирую...</> : '▶ Генерировать'}
+                  {loading.images ? <><span className={styles.spin}/> Генерирую...</> : `▶ Генерировать · ${backendLabel}`}
                 </button>
               </div>
             </div>
@@ -459,7 +574,7 @@ export default function Studio() {
               <div className={styles.empty}>
                 <div className={styles.emptyIcon}>🖼</div>
                 <div>Нажми «Генерировать» чтобы создать изображения</div>
-                <div className={styles.emptySub}>Промпты берутся с вкладки «Задача»</div>
+                <div className={styles.emptySub}>Промпты берутся с вкладки «Задача» · {backendLabel}</div>
               </div>
             )}
           </div>
@@ -471,16 +586,26 @@ export default function Studio() {
             <div className={styles.twoCol}>
               <div className={styles.col}>
                 <section className={styles.section}>
-                  <div className={styles.sectionTitle}>Модель анимации</div>
+                  <div className={styles.sectionHead}>
+                    <span className={styles.sectionTitle}>Модель анимации</span>
+                    <span style={{fontSize:11,color:'#888'}}>{backendLabel}</span>
+                  </div>
                   <div className={styles.modelGrid}>
-                    {VID_MODELS.map(m => (
-                      <button key={m.id} className={`${styles.modelCard} ${vidModel.id === m.id ? styles.modelCardActive : ''}`} onClick={() => setVidModel(m)}>
-                        {vidModel.id === m.id && <span className={styles.modelCheck}>✓</span>}
-                        <div className={styles.modelTag}>{m.tag}</div>
-                        <div className={styles.modelName}>{m.name}</div>
-                        <div className={styles.modelDesc}>{m.desc}</div>
-                      </button>
-                    ))}
+                    {VID_MODELS.map(m => {
+                      const hfOk = getHfVideoType(m.id)
+                      return (
+                        <button key={m.id} className={`${styles.modelCard} ${vidModel.id === m.id ? styles.modelCardActive : ''}`} onClick={() => setVidModel(m)}>
+                          {vidModel.id === m.id && <span className={styles.modelCheck}>✓</span>}
+                          <div className={styles.modelTag}>
+                            {m.tag}
+                            {backend === 'higgsfield' && !hfOk && <span style={{marginLeft:4,color:'#ff6b6b',fontSize:9}}>только fal</span>}
+                            {backend === 'higgsfield' && hfOk && <span style={{marginLeft:4,color:'#a78bfa',fontSize:9}}>HF ✓</span>}
+                          </div>
+                          <div className={styles.modelName}>{m.name}</div>
+                          <div className={styles.modelDesc}>{m.desc}</div>
+                        </button>
+                      )
+                    })}
                   </div>
                 </section>
 
@@ -529,7 +654,7 @@ export default function Studio() {
                 </section>
 
                 <button className={styles.btnPrimary} onClick={generateVideos} disabled={loading.videos || !images.length}>
-                  {loading.videos ? <><span className={styles.spin}/> Анимирую...</> : `▶ Анимировать через ${vidModel.name}`}
+                  {loading.videos ? <><span className={styles.spin}/> Анимирую...</> : `▶ Анимировать · ${vidModel.name} · ${backendLabel}`}
                 </button>
                 {progress.videos && <div className={`${styles.status} ${progress.videos.startsWith('✓') ? styles.statusOk : progress.videos.startsWith('✗') ? styles.statusErr : styles.statusRun}`}>{progress.videos}</div>}
               </div>
@@ -664,7 +789,7 @@ export default function Studio() {
                   onClick={runLipsync}
                   disabled={loading.lipsync || !images.length || !audios.length}
                 >
-                  {loading.lipsync ? <><span className={styles.spin}/> Создаю липсинк...</> : '▶ Создать липсинк · Kling Avatars'}
+                  {loading.lipsync ? <><span className={styles.spin}/> Создаю липсинк...</> : `▶ Липсинк · ${backendLabel}`}
                 </button>
                 {progress.lipsync && <div className={`${styles.status} ${progress.lipsync.startsWith('✓') ? styles.statusOk : progress.lipsync.startsWith('✗') ? styles.statusErr : styles.statusRun}`}>{progress.lipsync}</div>}
               </div>
