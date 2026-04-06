@@ -46,17 +46,15 @@ type Backend = 'fal' | 'higgsfield'
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
 export default function Studio() {
-  // Backend
   const [backend, setBackend] = useState<Backend>('fal')
   const [hfConnected, setHfConnected] = useState<boolean | null>(null)
 
-  // Keys
   const [falKey, setFalKey] = useState('')
   const [elKey, setElKey] = useState('')
   const [claudeKey, setClaudeKey] = useState('')
+  const [geminiKey, setGeminiKey] = useState('')
   const [keysOk, setKeysOk] = useState(false)
 
-  // Task
   const [task, setTask] = useState('')
   const [imgCount, setImgCount] = useState(5)
   const [aspect, setAspect] = useState('1:1')
@@ -67,42 +65,33 @@ export default function Studio() {
   const [refPreview, setRefPreview] = useState('')
   const refFileRef = useRef<HTMLInputElement>(null)
 
-  // Prompts
   const [prompts, setPrompts] = useState<Prompt[]>([])
   const [editedPrompts, setEditedPrompts] = useState<string[]>([])
 
-  // Images
   const [images, setImages] = useState<GeneratedImage[]>([])
   const [selectedImages, setSelectedImages] = useState<Set<number>>(new Set())
 
-  // Video
   const [motionMode, setMotionMode] = useState<'claude' | 'user'>('claude')
   const [motionPrompt, setMotionPrompt] = useState('')
   const [vidDuration, setVidDuration] = useState(5)
   const [videos, setVideos] = useState<GeneratedVideo[]>([])
 
-  // Audio
   const [voiceMode, setVoiceMode] = useState<'claude' | 'user'>('claude')
   const [voiceText, setVoiceText] = useState('')
   const [elVoice, setElVoice] = useState(EL_VOICES[0])
   const [elModel, setElModel] = useState('eleven_multilingual_v2')
   const [audios, setAudios] = useState<{text: string; data: string}[]>([])
 
-  // Lipsync
   const [lipsyncAudio, setLipsyncAudio] = useState<string>('')
   const [lipsyncImg, setLipsyncImg] = useState<number>(0)
 
-  // Active tab
   const [tab, setTab] = useState<'task'|'images'|'video'|'audio'|'lipsync'>('task')
 
-  // Loading states
   const [loading, setLoading] = useState<Record<string, boolean>>({})
   const [progress, setProgress] = useState<Record<string, string>>({})
 
   const setLoad = (k: string, v: boolean) => setLoading(p => ({...p, [k]: v}))
   const setMsg = (k: string, v: string) => setProgress(p => ({...p, [k]: v}))
-
-  // ─── CHECK HF EXTENSION ON MOUNT ─────────────────────────────────────────
 
   useEffect(() => {
     hfPing().then(ok => {
@@ -111,14 +100,13 @@ export default function Studio() {
     })
   }, [])
 
-  // ─── HELPERS ──────────────────────────────────────────────────────────────
-
   const headers = useCallback(() => ({
     'Content-Type': 'application/json',
     'x-fal-key': falKey,
     'x-el-key': elKey,
     'x-anthropic-key': claudeKey,
-  }), [falKey, elKey, claudeKey])
+    'x-gemini-key': geminiKey,
+  }), [falKey, elKey, claudeKey, geminiKey])
 
   const addTag = (tag: string) => setTask(t => t ? `${t}, ${tag}` : tag)
 
@@ -139,12 +127,16 @@ export default function Studio() {
     return s
   })
 
+  const hasPromptKey = !!(claudeKey || geminiKey)
+  const promptEngine = claudeKey ? '✦ Claude' : geminiKey ? '✦ Gemini' : ''
+
   // ─── API CALLS ────────────────────────────────────────────────────────────
 
   const generatePrompts = async () => {
     if (!task.trim()) return
+    if (!hasPromptKey) { setMsg('prompts', '✗ Нужен Claude или Gemini ключ для генерации промптов'); return }
     setLoad('prompts', true)
-    setMsg('prompts', '✦ Claude создаёт промпты...')
+    setMsg('prompts', `${promptEngine} создаёт промпты...`)
     try {
       const res = await fetch('/api/generate-prompts', {
         method: 'POST',
@@ -152,9 +144,10 @@ export default function Studio() {
         body: JSON.stringify({ task, count: imgCount, aspect, modelName: imgModel.name }),
       })
       const data = await res.json()
+      if (data.error) throw new Error(data.error)
       setPrompts(data.prompts)
       setEditedPrompts(data.prompts.map((p: Prompt) => p.prompt))
-      setMsg('prompts', `✓ Создано ${data.prompts.length} промптов`)
+      setMsg('prompts', `✓ Создано ${data.prompts.length} промптов через ${promptEngine}`)
     } catch (e) {
       setMsg('prompts', '✗ Ошибка: ' + (e as Error).message)
     }
@@ -176,12 +169,8 @@ export default function Studio() {
       setMsg('images', `${backend === 'higgsfield' ? '🟣 HF' : '🔵 fal'} Генерирую ${i + 1} / ${ps.length}...`)
       try {
         let url: string | undefined
-
         if (backend === 'higgsfield') {
-          url = await hfGenerateImage({
-            prompt: ps[i], modelId: imgModel.id,
-            aspect, resolution, referenceUrl: refUrl || undefined,
-          })
+          url = await hfGenerateImage({ prompt: ps[i], modelId: imgModel.id, aspect, resolution, referenceUrl: refUrl || undefined })
         } else {
           const res = await fetch('/api/generate-image', {
             method: 'POST', headers: headers(),
@@ -191,7 +180,6 @@ export default function Studio() {
           if (data.error) throw new Error(data.error)
           url = data.url
         }
-
         if (url) setImages(prev => [...prev, { url, prompt: ps[i], variation: prompts[i]?.variation || `#${i+1}` }])
       } catch (e) {
         console.error(`Image ${i+1} failed:`, e)
@@ -213,8 +201,8 @@ export default function Studio() {
     setVideos([])
 
     let mp = motionPrompt
-    if (motionMode === 'claude' && claudeKey) {
-      setMsg('videos', '✦ Claude придумывает движение...')
+    if (motionMode === 'claude' && hasPromptKey) {
+      setMsg('videos', `${promptEngine} придумывает движение...`)
       try {
         const res = await fetch('/api/generate-prompts', {
           method: 'POST', headers: headers(),
@@ -230,12 +218,8 @@ export default function Studio() {
       setMsg('videos', `${backend === 'higgsfield' ? '🟣 HF' : '🔵 fal'} Анимирую ${i + 1} / ${toAnim.length} через ${vidModel.name}...`)
       try {
         let url: string | undefined
-
         if (backend === 'higgsfield') {
-          url = await hfGenerateVideo({
-            imageUrl: img.url, modelId: vidModel.id,
-            prompt: mp, duration: vidDuration,
-          })
+          url = await hfGenerateVideo({ imageUrl: img.url, modelId: vidModel.id, prompt: mp, duration: vidDuration })
         } else {
           const res = await fetch('/api/generate-video', {
             method: 'POST', headers: headers(),
@@ -245,7 +229,6 @@ export default function Studio() {
           if (data.error) throw new Error(data.error)
           url = data.url
         }
-
         if (url) setVideos(prev => [...prev, { url, label: img.variation, fromImage: img.url }])
       } catch (e) {
         console.error(`Video ${i+1} failed:`, e)
@@ -261,8 +244,8 @@ export default function Studio() {
     setLoad('audio', true)
 
     let text = voiceText
-    if (voiceMode === 'claude' && claudeKey && task) {
-      setMsg('audio', '✦ Claude придумывает реплику...')
+    if (voiceMode === 'claude' && hasPromptKey && task) {
+      setMsg('audio', `${promptEngine} придумывает реплику...`)
       try {
         const res = await fetch('/api/generate-prompts', {
           method: 'POST', headers: headers(),
@@ -325,7 +308,6 @@ export default function Studio() {
 
   return (
     <div className={styles.root}>
-      {/* HEADER */}
       <header className={styles.header}>
         <div className={styles.headerInner}>
           <div className={styles.logo}>
@@ -344,29 +326,14 @@ export default function Studio() {
             ))}
           </nav>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
-            {/* BACKEND TOGGLE */}
             <div style={{display:'flex',borderRadius:8,overflow:'hidden',border:'1px solid rgba(255,255,255,0.1)'}}>
-              <button
-                onClick={() => setBackend('higgsfield')}
-                style={{
-                  padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
-                  background: backend === 'higgsfield' ? '#6c47ff' : 'rgba(255,255,255,0.05)',
-                  color: backend === 'higgsfield' ? '#fff' : '#888',
-                  opacity: hfConnected ? 1 : 0.4,
-                }}
-                disabled={!hfConnected}
-                title={hfConnected ? 'Higgsfield Bridge подключён' : 'Расширение не найдено'}
-              >
+              <button onClick={() => setBackend('higgsfield')} disabled={!hfConnected}
+                style={{padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',background:backend==='higgsfield'?'#6c47ff':'rgba(255,255,255,0.05)',color:backend==='higgsfield'?'#fff':'#888',opacity:hfConnected?1:0.4}}
+                title={hfConnected ? 'Higgsfield Bridge подключён' : 'Расширение не найдено'}>
                 🟣 HF {hfConnected ? '✓' : '✗'}
               </button>
-              <button
-                onClick={() => setBackend('fal')}
-                style={{
-                  padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',
-                  background: backend === 'fal' ? '#2563eb' : 'rgba(255,255,255,0.05)',
-                  color: backend === 'fal' ? '#fff' : '#888',
-                }}
-              >
+              <button onClick={() => setBackend('fal')}
+                style={{padding:'6px 10px',fontSize:11,fontWeight:500,border:'none',cursor:'pointer',background:backend==='fal'?'#2563eb':'rgba(255,255,255,0.05)',color:backend==='fal'?'#fff':'#888'}}>
                 🔵 fal.ai
               </button>
             </div>
@@ -377,7 +344,6 @@ export default function Studio() {
         </div>
       </header>
 
-      {/* KEYS MODAL */}
       {!keysOk && (
         <div className={styles.modal}>
           <div className={styles.modalBox}>
@@ -388,9 +354,7 @@ export default function Studio() {
                 : 'Хранятся только в браузере, никуда не отправляются'}
             </div>
             <div className={styles.field}>
-              <label className={styles.label}>
-                fal.ai API Key <span className={styles.labelNote}>— изображения и видео {canSkipFalKey && '(необязательно с HF)'}</span>
-              </label>
+              <label className={styles.label}>fal.ai API Key <span className={styles.labelNote}>— изображения и видео {canSkipFalKey && '(необязательно с HF)'}</span></label>
               <input className={styles.input} type="password" value={falKey} onChange={e => setFalKey(e.target.value)} placeholder="fal-..." />
               <div className={styles.inputNote}><a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer">fal.ai/dashboard</a> → API Keys</div>
             </div>
@@ -400,9 +364,14 @@ export default function Studio() {
               <div className={styles.inputNote}><a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noreferrer">elevenlabs.io</a> → Settings → API Keys</div>
             </div>
             <div className={styles.field}>
-              <label className={styles.label}>Anthropic API Key <span className={styles.labelNote}>— автогенерация промптов (необязательно)</span></label>
+              <label className={styles.label}>Gemini API Key <span className={styles.labelNote}>— бесплатная генерация промптов</span></label>
+              <input className={styles.input} type="password" value={geminiKey} onChange={e => setGeminiKey(e.target.value)} placeholder="AIza..." />
+              <div className={styles.inputNote}><a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a> → Create API Key (бесплатно)</div>
+            </div>
+            <div className={styles.field}>
+              <label className={styles.label}>Anthropic API Key <span className={styles.labelNote}>— промпты через Claude (необязательно)</span></label>
               <input className={styles.input} type="password" value={claudeKey} onChange={e => setClaudeKey(e.target.value)} placeholder="sk-ant-..." />
-              <div className={styles.inputNote}><a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a></div>
+              <div className={styles.inputNote}><a href="https://console.anthropic.com" target="_blank" rel="noreferrer">console.anthropic.com</a> (платный, приоритет над Gemini)</div>
             </div>
             <button className={styles.btnPrimary} onClick={() => { if (falKey || canSkipFalKey) setKeysOk(true) }}>
               {(falKey || canSkipFalKey) ? 'Готово →' : 'Нужен хотя бы fal.ai ключ'}
@@ -411,10 +380,8 @@ export default function Studio() {
         </div>
       )}
 
-      {/* MAIN */}
       <main className={styles.main}>
 
-        {/* ── TASK TAB ── */}
         {tab === 'task' && (
           <div className={styles.pageWrap}>
             <div className={styles.twoCol}>
@@ -422,15 +389,12 @@ export default function Studio() {
                 <section className={styles.section}>
                   <div className={styles.sectionHead}>
                     <span className={styles.sectionTitle}>Задача</span>
-                    <span className={styles.badge} style={{background:'rgba(108,71,255,0.15)',color:'#a88fff'}}>✦ Claude придумает промпты</span>
+                    <span className={styles.badge} style={{background:'rgba(108,71,255,0.15)',color:'#a88fff'}}>
+                      {hasPromptKey ? `${promptEngine} придумает промпты` : 'Нужен Gemini или Claude ключ'}
+                    </span>
                   </div>
-                  <textarea
-                    className={styles.textarea}
-                    rows={4}
-                    value={task}
-                    onChange={e => setTask(e.target.value)}
-                    placeholder="Опиши что нужно сгенерировать. Например: пачка статики нанобанана — игривый персонаж-банан с руками и лицом, разные позы, мультяшный стиль, белый фон..."
-                  />
+                  <textarea className={styles.textarea} rows={4} value={task} onChange={e => setTask(e.target.value)}
+                    placeholder="Опиши что нужно сгенерировать. Например: пачка статики нанобанана — игривый персонаж-банан с руками и лицом, разные позы, мультяшный стиль, белый фон..." />
                   <div className={styles.tagRow}>
                     {['нанобанан','белый фон','разные позы','мультяшный стиль','cinematic','product shot','anime','3D render'].map(t => (
                       <button key={t} className={styles.tag} onClick={() => addTag(t)}>{t}</button>
@@ -471,9 +435,7 @@ export default function Studio() {
                 <section className={styles.section}>
                   <div className={styles.sectionTitle}>Референс <span className={styles.labelNote}>необязательно</span></div>
                   <div className={styles.refRow}>
-                    <button className={styles.btnGhost} onClick={() => refFileRef.current?.click()}>
-                      📎 Загрузить файл
-                    </button>
+                    <button className={styles.btnGhost} onClick={() => refFileRef.current?.click()}>📎 Загрузить файл</button>
                     <input ref={refFileRef} type="file" accept="image/*" style={{display:'none'}} onChange={handleRefFile} />
                     <input className={styles.inputInline} type="text" placeholder="или вставь URL..." value={refUrl} onChange={e => { setRefUrl(e.target.value); setRefPreview('') }} />
                     {refUrl && <button className={styles.btnIcon} onClick={() => { setRefUrl(''); setRefPreview('') }}>✕</button>}
@@ -481,12 +443,8 @@ export default function Studio() {
                   {refPreview && <img src={refPreview} className={styles.refThumb} alt="ref" />}
                 </section>
 
-                <button
-                  className={styles.btnPrimary}
-                  onClick={generatePrompts}
-                  disabled={loading.prompts || !task.trim()}
-                >
-                  {loading.prompts ? <><span className={styles.spin}/> Генерирую...</> : '✦ Сгенерировать промпты через Claude'}
+                <button className={styles.btnPrimary} onClick={generatePrompts} disabled={loading.prompts || !task.trim() || !hasPromptKey}>
+                  {loading.prompts ? <><span className={styles.spin}/> Генерирую...</> : `${promptEngine || '✦'} Сгенерировать промпты`}
                 </button>
                 {progress.prompts && <div className={`${styles.status} ${progress.prompts.startsWith('✓') ? styles.statusOk : progress.prompts.startsWith('✗') ? styles.statusErr : styles.statusRun}`}>{progress.prompts}</div>}
               </div>
@@ -526,11 +484,8 @@ export default function Studio() {
                       {prompts.map((p, i) => (
                         <div key={i} className={styles.promptItem}>
                           <div className={styles.promptVar}>{p.variation}</div>
-                          <textarea
-                            className={styles.promptEdit}
-                            value={editedPrompts[i] ?? p.prompt}
-                            onChange={e => setEditedPrompts(prev => { const n=[...prev]; n[i]=e.target.value; return n })}
-                          />
+                          <textarea className={styles.promptEdit} value={editedPrompts[i] ?? p.prompt}
+                            onChange={e => setEditedPrompts(prev => { const n=[...prev]; n[i]=e.target.value; return n })} />
                         </div>
                       ))}
                     </div>
@@ -541,7 +496,6 @@ export default function Studio() {
           </div>
         )}
 
-        {/* ── IMAGES TAB ── */}
         {tab === 'images' && (
           <div className={styles.pageWrap}>
             <div className={styles.pageHead}>
@@ -580,7 +534,6 @@ export default function Studio() {
           </div>
         )}
 
-        {/* ── VIDEO TAB ── */}
         {tab === 'video' && (
           <div className={styles.pageWrap}>
             <div className={styles.twoCol}>
@@ -622,7 +575,7 @@ export default function Studio() {
                     <div className={styles.field}>
                       <label className={styles.label}>Промпт движения</label>
                       <div className={styles.toggleRow}>
-                        <button className={`${styles.toggleBtn} ${motionMode==='claude' ? styles.toggleActive : ''}`} onClick={() => setMotionMode('claude')}>✦ Claude</button>
+                        <button className={`${styles.toggleBtn} ${motionMode==='claude' ? styles.toggleActive : ''}`} onClick={() => setMotionMode('claude')}>{promptEngine || '✦ AI'}</button>
                         <button className={`${styles.toggleBtn} ${motionMode==='user' ? styles.toggleActive : ''}`} onClick={() => setMotionMode('user')}>Я укажу</button>
                       </div>
                     </div>
@@ -686,7 +639,6 @@ export default function Studio() {
           </div>
         )}
 
-        {/* ── AUDIO TAB ── */}
         {tab === 'audio' && (
           <div className={styles.pageWrap}>
             <div className={styles.twoCol}>
@@ -694,7 +646,7 @@ export default function Studio() {
                 <section className={styles.section}>
                   <div className={styles.sectionTitle}>Текст реплики</div>
                   <div className={styles.toggleRow} style={{marginBottom:10}}>
-                    <button className={`${styles.toggleBtn} ${voiceMode==='claude' ? styles.toggleActive : ''}`} onClick={() => setVoiceMode('claude')}>✦ Claude придумает</button>
+                    <button className={`${styles.toggleBtn} ${voiceMode==='claude' ? styles.toggleActive : ''}`} onClick={() => setVoiceMode('claude')}>{promptEngine || '✦ AI'} придумает</button>
                     <button className={`${styles.toggleBtn} ${voiceMode==='user' ? styles.toggleActive : ''}`} onClick={() => setVoiceMode('user')}>Я дам текст</button>
                   </div>
                   {voiceMode === 'user' && (
@@ -755,7 +707,6 @@ export default function Studio() {
           </div>
         )}
 
-        {/* ── LIPSYNC TAB ── */}
         {tab === 'lipsync' && (
           <div className={styles.pageWrap}>
             <div className={styles.twoCol}>
@@ -784,11 +735,7 @@ export default function Studio() {
                   ) : <div className={styles.emptySmall}>Сначала сгенерируй озвучку на вкладке «Озвучка»</div>}
                 </section>
 
-                <button
-                  className={styles.btnPrimary}
-                  onClick={runLipsync}
-                  disabled={loading.lipsync || !images.length || !audios.length}
-                >
+                <button className={styles.btnPrimary} onClick={runLipsync} disabled={loading.lipsync || !images.length || !audios.length}>
                   {loading.lipsync ? <><span className={styles.spin}/> Создаю липсинк...</> : `▶ Липсинк · ${backendLabel}`}
                 </button>
                 {progress.lipsync && <div className={`${styles.status} ${progress.lipsync.startsWith('✓') ? styles.statusOk : progress.lipsync.startsWith('✗') ? styles.statusErr : styles.statusRun}`}>{progress.lipsync}</div>}
